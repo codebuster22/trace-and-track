@@ -2,16 +2,20 @@
 
 pragma solidity ^0.8.0;
 
-// 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4 - Surat
-// 0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2 - Mumbai - 411000
-// 0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db - Nashik - 511000
-// 0x78731D3Ca6b7E34aC0F824c42a7cC18A495cabaB - Pune 
+// For testing
+// 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4 - Althan - 395007
+// 0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2 - Airoli - 411000
+// 0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db - Vashi - 511000
+// 0x78731D3Ca6b7E34aC0F824c42a7cC18A495cabaB - Wakad  - 411051
 // 0x617F2E2fD72FD9D5503197092aC168c91465E7f2 - Sender 
 // 0x17F6AD8Ef982297579C203069C1DbfFE4348c372 - Receiver
 
 
+// Interface of Product Management Smart Contract to integrate shipment of a Product manufactured
 interface ProductManagement{
-    function getHashes(uint _id) external view returns(bytes32);
+    function setProductLocation(bytes32 _hash, uint _newLocation) external;
+    function getProductLocation(uint _id) external view returns(uint location_);
+    function getProductHash(uint _id) external view returns(bytes32 hash_);
 }
 
 contract TransitManagement{
@@ -19,6 +23,7 @@ contract TransitManagement{
     // State Variables
     enum State{Registered, Waiting, InTransit, Delivered, Returned, Cancelled}
     
+    // A blueprint of details for a normal consignment
     struct Consignment{
         uint consignment_id;
         address sender;
@@ -34,6 +39,7 @@ contract TransitManagement{
         uint[] hubs_hoped;
         uint state;
     }
+    // Mapping 
     mapping(uint=>Consignment) public consignments;
     uint public consignment_counter;
     
@@ -53,7 +59,7 @@ contract TransitManagement{
     
     mapping(address=>uint[]) public sender_consignments;
     
-    constructor (address _address) public {
+    constructor (address _address) {
         products = ProductManagement(_address);
     }
     
@@ -73,7 +79,10 @@ contract TransitManagement{
         consignment_counter++;
         consignments[consignment_counter].consignment_id = consignment_counter;
         consignments[consignment_counter].sender = msg.sender;
-        consignments[consignment_counter].product_hash = products.getHashes(_product);
+        consignments[consignment_counter].product_hash = products.getProductHash(_product);
+        
+        require(_from == products.getProductLocation(_product),"Product not availabe at this location");
+        
         consignments[consignment_counter].from_hub = _from;
         consignments[consignment_counter].to_hub = _to;
         consignments[consignment_counter].registered_date = block.timestamp;
@@ -104,7 +113,10 @@ contract TransitManagement{
     }
     
     function cancelConsignment(uint id) public {
+        require(consignments[id].sender==msg.sender, "Only sender can cancel the consignment");
         require(consignments[id].state!=uint(State.Delivered),"Already Delivered");
+        require(consignments[id].state!=uint(State.Cancelled),"Already Cancelled");
+        require(consignments[id].state!=uint(State.Returned),"Already Returned");
         consignments[id].state = uint(State.Cancelled);
     }
     
@@ -155,6 +167,7 @@ contract TransitManagement{
         }else{
             hubs[manager_to_hub[msg.sender]].consignment_waiting.push(_consignment_id);
         }
+        products.setProductLocation(consignments[_consignment_id].product_hash,manager_to_hub[msg.sender]);
     }
     
     modifier requireDestination(uint _consignment_id) {
@@ -168,10 +181,6 @@ contract TransitManagement{
         consignments[_consignment_id].received_date = block.timestamp;
         consignments[_consignment_id].state = uint(State.Delivered);
         hubs[curr_hub].consignment_received.push(_consignment_id);
-    }
-    
-    function getStatus(uint _consignment_id) public view returns(Consignment memory) {
-        return consignments[_consignment_id];
     }
     
     function getMyConsignments() public view returns(uint[] memory) {

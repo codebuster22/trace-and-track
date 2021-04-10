@@ -2,9 +2,10 @@
 
 pragma solidity ^0.8.0;
 
-import 'https://github.com/OpenZeppelin/openzeppelin-contracts/contracts/utils/Strings.sol';
+import '@openzeppelin/contracts/utils/Strings.sol';
+import '@openzeppelin/contracts/access/Ownable.sol';
 
-contract ProductManagement{
+contract ProductManagement is Ownable{
     
     using Strings for *;
     
@@ -24,15 +25,22 @@ contract ProductManagement{
         uint part_counter;
         mapping(uint=>address) owners;
         uint owner_counter;
-    }
-    
+        }
+        
+    address transitManager;
+        
     mapping(bytes32=>Product) public products;
     mapping(bytes32=>address) public product_owners;
     
-    mapping(uint=>bytes32) public hashes;
+    mapping(Product_Type=>uint) public product_to_stock;
+    mapping(Product_Type=>mapping(bytes32=>bool)) public product_to_product_id_to_is_used;
+    mapping(Product_Type=>uint[]) public product_already_used;
+    
+    mapping(uint=>bytes32) public id_to_hash;
+    mapping(bytes32=>uint) public hash_to_id;
     uint public hash_counter;
     
-    event ProductCreated(uint _location, uint _price, string _serial, address _brand, uint _grade, uint _product_type, uint total_parts);
+    event ProductCreated(bytes32 uuid, uint _location, uint _price, string _serial, address _brand, uint _grade, uint _product_type, uint total_parts);
     event ProductOwnershipTransfered(address prev_owner, address new_owner);
     
     // Functional Declarations
@@ -50,14 +58,17 @@ contract ProductManagement{
         
         require(products[uuid].manufacturer == address(0),"Product Already Exists");
         
-        uint j;
+        uint i;
         if(_parts.length!=0){
-            for(uint i; i<_parts.length;i++){
-                require(products[hashes[_parts[i]]].manufacturer != address(0), "Product do not exist");
-            }
-            for( j ; j<_parts.length;j++){
-                products[uuid].parts[j] = hashes[_parts[j]];
-                product_owners[hashes[_parts[j]]] = _brand;
+            for(i; i<_parts.length;i++){
+                bytes32 h = id_to_hash[_parts[i]];
+                require(products[h].manufacturer != address(0), "Part do not exist");
+                require(!product_to_product_id_to_is_used[products[h].product_type][h], "Parts already in use");
+                product_to_product_id_to_is_used[ products[h].product_type ][ h ] = true;
+                product_already_used[products[ h ].product_type].push( hash_to_id[h] );
+                product_to_stock[ products[ h ].product_type ] -= 1;
+                products[uuid].parts[ i ] = h;
+                product_owners[ h ] = _brand;
             }
         }
         
@@ -71,17 +82,18 @@ contract ProductManagement{
         products[uuid].price = _price;
         products[uuid].owners[1] = _brand;
         products[uuid].owner_counter = 1;
-        products[uuid].part_counter = j;
+        products[uuid].part_counter = i;
         
         
         hash_counter++;
-        hashes[hash_counter] = uuid;
+        id_to_hash[hash_counter] = uuid;
+        hash_to_id[uuid] = hash_counter;
+        product_to_stock[Product_Type(_product_type)] += 1;
+        product_to_product_id_to_is_used[Product_Type(_product_type)][uuid] = false;
         
         product_owners[uuid] = _brand;
-    }
-    
-    function getProductHash(string memory _serial,address _brand, uint8 _product_type) public pure returns(bytes32){
-        return hash( _serial, _brand, _product_type.toString());
+        
+        emit ProductCreated(uuid, _location, _price, _serial, _brand, _grade, _product_type, _parts.length);
     }
     
     function transferOwnership(address _new_owner,string memory _serial,address _brand, uint8 _product_type) public {
@@ -90,7 +102,56 @@ contract ProductManagement{
         require(product_owners[uuid] != _new_owner, "New owner is already current owner");
         product_owners[uuid] = _new_owner;
         products[ uuid ].owners[ products[uuid].owner_counter++ ] = _new_owner;
+        for(uint i=0; i < products[uuid].part_counter; i++ ){
+            _transferOwnershipByHash(_new_owner, msg.sender, products[uuid].parts[i]);
+        }
         emit ProductOwnershipTransfered( products[uuid].owners[products[uuid].owner_counter-1] , _new_owner );
+    }
+    
+    function _transferOwnershipByHash(address _new_owner, address _owner, bytes32 _uuid) private {
+        require(product_owners[_uuid] == _owner, "You are not the Owner of the part");
+        require(product_owners[_uuid] != _new_owner, "New owner is already current owner");
+        product_owners[_uuid] = _new_owner;
+        products[ _uuid ].owners[ products[_uuid].owner_counter++ ] = _new_owner;
+        emit ProductOwnershipTransfered( products[_uuid].owners[products[_uuid].owner_counter-1] , _new_owner );
+    }
+    
+    function setTransitManager(address _transit_manager) public onlyOwner{
+        transitManager=_transit_manager;
+    }
+    
+    function getProductLocation(uint _id) public view returns(uint location_){
+        return products[id_to_hash[_id]].location;
+    }
+    
+    function setProductLocation(bytes32 _hash, uint _newLocation) public {
+        require(msg.sender==transitManager,"Only Transit Manager can change the location of a product");
+        products[_hash].location=_newLocation;
+    }
+    
+    function getProductHash(uint _id) public view returns(bytes32 hash_){
+        require(products[id_to_hash[_id]].brand!=address(0), "Product Does not exists");
+        return id_to_hash[_id];
+    }
+    
+    function getPartsHash(bytes32 _uuid, uint _part_id) public view returns(bytes32 part_uuid_){
+        return products[_uuid].parts[_part_id];
+    }
+    
+    function getTotalPartsCount(bytes32 _uuid) public view returns(uint total_parts_){
+        return products[_uuid].part_counter;
+    }
+    
+    function getProductOwnerAtIndex(bytes32 _uuid, uint _owner_id) public view returns(address owner_){
+        return products[_uuid].owners[_owner_id];
+    }
+    
+    function getTotalOwnerCount(bytes32 _uuid) public view returns(uint total_owners_){
+        return products[_uuid].owner_counter;
+    }
+    
+    function getProductHash(string memory _serial,address _brand, uint8 _product_type) public pure returns(bytes32 hash_){
+        return hash( _serial, _brand, _product_type.toString());
     }
     
     function hash(string memory s1, address s2, string memory s3) private pure returns (bytes32){
